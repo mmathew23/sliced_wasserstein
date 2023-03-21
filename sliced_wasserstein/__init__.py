@@ -1,1 +1,1 @@
-from gsw import GSWD, MGSWD, LinearProjector, NNProjector, PolyProjector
+from .gsw import GSWD, MGSWD, LinearProjector, NNProjector, PolyProjector
