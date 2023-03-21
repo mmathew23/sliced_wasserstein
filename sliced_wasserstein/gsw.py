@@ -11,14 +11,15 @@ def normalize_weights(weights):
 class Projector(nn.Module):
     """
         Base Class for linear and non-linear projections
-        freeze and unfreeze
-        reset params
     """
     def __init__(self):
         super(Projector, self).__init__()
         self.training = False
 
     def set_training(self, status):
+        """
+        Set if params are frozen or not
+        """
         self.training = status
         for param in self.parameters():
             param.requires_grad = self.training
@@ -28,13 +29,25 @@ class Projector(nn.Module):
 
 
 class LinearProjector(Projector):
+    """
+    A Linear Projector for Sliced Wasserstein Distance
+    """
     def __init__(self, input_features, final_dim):
+        """
+        Init for LinearProjector
+        :param input_features: channel dimension of input features to be projected
+        :param final_dim: the final output dimension of projected features
+        """
         super(LinearProjector, self).__init__()
         self.projection = nn.Parameter(torch.randn(final_dim, input_features))
         self.reset()
         self.set_training(False)
 
     def reset(self, force=False):
+        """
+        Reset projection
+        :param force: Whether or not to force reset even if training
+        """
         if not self.training or force:
             self.projection.data = torch.randn_like(self.projection)
 
@@ -43,9 +56,19 @@ class LinearProjector(Projector):
 
 
 class NNProjector(Projector):
+    """
+    A Neural Network Projector for Sliced Wasserstein Distance
+    """
     def __init__(
         self, num_layer, input_features, hidden_dim, final_dim,
     ):
+        """
+        Init for NNProjector
+        :param num_layer: Number of layers of neural network
+        :param input_features: channel dimension of input features to be projected
+        :param hidden_dim: dimension of hidden layers
+        :param final_dim: the final output dimension of projected features
+        """
         super(NNProjector, self).__init__()
         self.projection = nn.Sequential(
             nn.Linear(input_features, hidden_dim, bias=False),
@@ -65,11 +88,16 @@ class NNProjector(Projector):
         self.set_training(False)
 
     def reset(self, force=False):
+        """
+        Reset projection
+        :param force: Whether or not to force reset even if training
+        """
         if not self.training or force:
             for module in self.projection.children():
                 if isinstance(module, nn.Linear):
                     nn.init.xavier_uniform_(
-                        module.weight, gain=nn.init.calculate_gain('leaky_relu')
+                        module.weight,
+                        gain=nn.init.calculate_gain('leaky_relu')
                     )
             self.final_projection.data = torch.randn_like(
                 self.final_projection
@@ -81,7 +109,16 @@ class NNProjector(Projector):
 
 
 class PolyProjector(Projector):
+    """
+    A Homogeneous Polynomial Projector for Sliced Wasserstein Distance
+    """
     def __init__(self, input_features, degree, final_dim):
+        """
+        Init for PolyProjector
+        :param input_features: channel dimension of input features to be projected
+        :param degree: degree of polynomial to use, eg 3, 5
+        :param final_dim: the final output dimension of projected features
+        """
         super(PolyProjector, self).__init__()
 
         self.degree = degree
@@ -95,6 +132,10 @@ class PolyProjector(Projector):
         self.set_training(False)
 
     def reset(self, force=False):
+        """
+        Reset projection
+        :param force: Whether or not to force reset even if training
+        """
         if not self.training or force:
             self.projection.data = torch.randn_like(self.projection)
 
@@ -105,51 +146,72 @@ class PolyProjector(Projector):
         return F.linear(x, normalize_weights(self.projection), None)
 
 
-def GSWD(x, y, projector, loss_type='l1'):
-    projector.reset()
-    x_push_forward = projector(x)
-    y_push_forward = projector(y)
-#     print(x_push_forward.shape, y_push_forward.shape)
-    x_sort = torch.sort(x_push_forward, dim=-2)
-    y_sort = torch.sort(y_push_forward, dim=-2)
+class GSWD(nn.Module):
+    """
+    A Class to calculate the Generalized Sliced Wasserstein Distance
+    """
+    def __init__(self, projector, loss_type='l1'):
+        """
+        :param projector: A `Projector` instance
+        :param loss_type: mse or l1
+        """
+        super(GSWD, self).__init__()
+        assert loss_type in ('l1', 'mse')
+        self.loss = getattr(torch.nn.functional, f'{loss_type}_loss')
+        self.projector = projector
 
-    if loss_type == 'l1':
-        return F.l1_loss(x_sort.values, y_sort.values)
-    elif loss_type == 'mse':
-        return F.mse_loss(x_sort.values, y_sort.values)
-    else:
-        raise NotImplementedError
+    def forward(self, x, y):
+        self.projector.reset()
+        x_push_forward = self.projector(x)
+        y_push_forward = self.projector(y)
+
+        x_sort = torch.sort(x_push_forward, dim=-2)
+        y_sort = torch.sort(y_push_forward, dim=-2)
+
+        return self.loss(x_sort.values, y_sort.values)
 
 
-print_max = 0
+class MGSWD(GSWD):
+    """
+    A Class to calculate the Max Generalized Sliced Wasserstein Distance
+    """
+    def __init__(
+        self, projector, loss_type, lr=1e-1, iterations=10, verbose=False
+    ):
+        """
+        :param projector: A `Projector` instance
+        :param loss_type: mse or l1
+        :param lr: the learning rate for sub optimzation
+        :param iterations: the number of iterations to run
+        :param verbose: Whether or not to print sub optimization losses
+        """
+        super(MGSWD, self).__init__(projector, loss_type)
+        self.lr = lr
+        self.iterations = iterations
+        self.print_max = 0
+        self.verbose = verbose
 
+    def forward(self, x, y):
+        x_detach = x.detach()
+        y_detach = y.detach()
 
-def MGSWD(x, y, projector, loss_type='l1', lr=1e-1, iterations=10):
+        with torch.enable_grad():
+            self.projector.set_training(True)
+            self.projector.reset(force=True)
+            optimizer = torch.optim.Adam(self.projector.parameters(), lr=self.lr)
+            for i in range(self.iterations):
+                optimizer.zero_grad()
 
-    x_detach = x.detach()
-    y_detach = y.detach()
-    global print_max
+                loss = -super(MGSWD, self).forward(x_detach, y_detach)
 
-    projector.set_training(True)
-    projector.reset(force=True)
-    optimizer = torch.optim.Adam(projector.parameters(), lr=lr)
-    for i in range(iterations):
-        optimizer.zero_grad()
+                loss.backward()
 
-        loss = -GSWD(
-            x_detach, y_detach, projector, loss_type=loss_type,
-        )
+                optimizer.step()
+                if self.verbose and self.print_max % 100 == 0:
+                    print(f'\tLoss{i}: {loss.item()}')
 
-        loss.backward()
-
-        optimizer.step()
-        if print_max % 100 == 0:
-            print(f'\tLoss{i}: {loss.item()}')
-
-    print_max += 1
-    return GSWD(
-        x, y, projector, loss_type=loss_type
-    )
+        self.print_max += 1
+        return super(MGSWD, self).forward(x, y)
 
 
 class PolyPowers:
