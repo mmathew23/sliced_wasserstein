@@ -151,24 +151,6 @@ class MnistDecoder(nn.Module):
         return self.convs(self.linear(x).view(x.shape[0], -1, 4, 4))
 
 
-class MnistClassifier(nn.Module):
-    def __init__(self, initial_dim):
-        super(MnistClassifier, self).__init__()
-        self.inital_dim = initial_dim
-
-        self.linear = nn.Sequential(
-            nn.Linear(self.inital_dim, 2*self.inital_dim),
-            nn.LeakyReLU(negative_slope=0.2),
-            nn.Linear(2*self.inital_dim, 4*self.inital_dim),
-            nn.LeakyReLU(negative_slope=0.2),
-            nn.Linear(4*self.inital_dim, 10),
-            nn.LogSoftmax(dim=1)
-        )
-
-    def forward(self, x):
-        return self.linear(x.flatten(1))
-
-
 class AE(nn.Module):
     def __init__(self, dim=1):
         super(AE, self).__init__()
