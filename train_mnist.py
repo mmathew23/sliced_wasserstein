@@ -312,7 +312,7 @@ def main(
     total_epochs = epochs*len(dataloader)
     scheduler = CosineAnnealingWarmup(optimizer, warmup_epochs=total_epochs/30,
                                       total_epochs=total_epochs)
-    assert len(dataloader) == len(dataloader.dataset) // batch_size + (1 if len(dataloader.dataset)%batch_size else 1)
+    assert len(dataloader) == len(dataloader.dataset) // batch_size + (1 if len(dataloader.dataset)%batch_size else 0)
 
     ae.cuda(device)
     projector.cuda(device)
